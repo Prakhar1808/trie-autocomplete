@@ -6,4 +6,19 @@ build-backend = "setuptools.build_meta"
 name = "trie-autocomplete"
 version = "0.1.0"
 description = "Trie-based autocomplete"
-dependencies = []
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "wordfreq",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["trie*", "api*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
