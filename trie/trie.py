@@ -1,4 +1,4 @@
-from node import TrieNode
+from .node import TrieNode
 
 class Trie:
     def __init__(self):
