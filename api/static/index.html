@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trie Autocomplete</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { mono: ["'JetBrains Mono'", "Consolas", "monospace"] },
+          animation: {
+            "fade-in":    "fadeIn 0.2s ease-out",
+            "slide-in":   "slideIn 0.24s cubic-bezier(0.16,1,0.3,1)",
+            "node-pop":   "nodePop 0.26s cubic-bezier(0.34,1.56,0.64,1) both",
+          },
+          keyframes: {
+            fadeIn:   { "0%": { opacity: 0 }, "100%": { opacity: 1 } },
+            slideIn:  { "0%": { opacity: 0, transform: "translateY(-6px)" }, "100%": { opacity: 1, transform: "translateY(0)" } },
+            nodePop:  { "0%": { transform: "scale(0.4)", opacity: 0 }, "100%": { transform: "scale(1)", opacity: 1 } },
+          }
+        }
+      }
+    }
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body { font-family: 'Inter', sans-serif; }
+
+    /* Full-viewport green-tinted background */
+    .gradient-bg {
+      min-height: 100dvh;
+      background:
+        radial-gradient(ellipse at 12% 70%, rgba(16,185,129,0.13) 0%, transparent 50%),
+        radial-gradient(ellipse at 88% 15%, rgba(52,211,153,0.07) 0%, transparent 45%),
+        #040d07;
+    }
+
+    /* Glass card */
+    .glass {
+      background: rgba(8, 22, 13, 0.72);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+
+    /* Thin scrollbars */
+    .thin-scroll::-webkit-scrollbar { width: 3px; }
+    .thin-scroll::-webkit-scrollbar-track { background: transparent; }
+    .thin-scroll::-webkit-scrollbar-thumb { background: #1a3d27; border-radius: 9999px; }
+
+    /* Active suggestion row */
+    .suggestion-item.active { background: rgba(16,185,129,0.07); }
+    .suggestion-item.active .suggestion-text { color: #34d399; }
+
+    /* Node pop animation */
+    .trie-node { animation: nodePop 0.26s cubic-bezier(0.34,1.56,0.64,1) both; }
+
+    /* Keyboard badge */
+    kbd {
+      display: inline-flex; align-items: center;
+      padding: 1px 5px; border-radius: 4px;
+      background: #0f2218; border: 1px solid #1a3828;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; color: #3d6b52;
+      line-height: 1.6;
+    }
+
+    input[type=range] { accent-color: #10b981; }
+  </style>
+</head>
+
+<!--
+  Layout strategy for desktop:
+  - body is a flex column: top-bar (title) + main-content (fills remaining height)
+  - main-content is a 2-column grid that stretches to fill the space
+  - each column is a flex column so inner sections can grow/shrink properly
+  - suggestions list and viz scroll both use flex-1 + overflow-y-auto
+    so they consume all available height without fixed pixel values
+-->
+<body class="gradient-bg flex flex-col text-slate-100">
+
+  <!-- ── Top bar: title + subtitle ── -->
+  <header class="flex-none text-center py-7 px-6 animate-fade-in">
+    <h1 class="text-3xl xl:text-4xl font-bold tracking-tight">
+      <span class="text-white">Trie</span>
+      <span class="text-emerald-400">Autocomplete</span>
+    </h1>
+    <p class="mt-1.5 text-slate-500 text-sm xl:text-base">
+      28,000+ words loaded into an in-memory prefix tree.
+      Every keystroke traverses the trie in <span class="text-emerald-400 font-mono">O(P)</span> time.
+    </p>
+  </header>
+
+  <!-- ── Main two-column area — grows to fill remaining viewport height ── -->
+  <main class="flex-1 min-h-0 px-5 xl:px-10 pb-5 animate-slide-in">
+    <div class="h-full grid grid-cols-1 lg:grid-cols-2 gap-5 max-w-screen-2xl mx-auto">
+
+      <!-- ═══════════════ LEFT: Search + Suggestions ═══════════════ -->
+      <div class="glass rounded-2xl border border-emerald-900/40 shadow-2xl flex flex-col min-h-0 overflow-hidden">
+
+        <!-- Search input row -->
+        <div class="flex-none flex items-center gap-3 px-5 py-4 border-b border-emerald-900/30">
+          <svg class="w-5 h-5 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input
+            id="search-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Start typing a word…"
+            class="flex-1 bg-transparent text-lg xl:text-xl text-slate-100 placeholder-slate-700 outline-none caret-emerald-400 font-medium"
+          />
+          <div id="latency-badge" class="hidden flex items-center gap-1.5 text-xs font-mono text-slate-500 flex-shrink-0">
+            <span id="latency-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+            <span id="latency-ms"></span>
+          </div>
+          <button id="clear-btn" class="hidden flex-shrink-0 p-1.5 rounded-lg text-slate-600 hover:text-slate-300 hover:bg-emerald-900/30 transition-colors" aria-label="Clear">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Limit slider -->
+        <div class="flex-none flex items-center gap-4 px-5 py-2.5 border-b border-emerald-900/20 bg-black/10">
+          <span class="text-xs text-slate-600 flex-shrink-0 w-24">Suggestions</span>
+          <input id="limit-slider" type="range" min="1" max="20" value="8" class="flex-1 h-1 cursor-pointer" />
+          <span id="limit-val" class="text-xs font-mono text-emerald-400 w-5 text-right flex-shrink-0">8</span>
+        </div>
+
+        <!-- Suggestions list — flex-1 so it expands to fill all remaining card height -->
+        <div id="suggestions-list" class="flex-1 min-h-0 overflow-y-auto thin-scroll divide-y divide-emerald-900/20"></div>
+
+        <!-- Empty / idle states (shown inside the flex-1 area) -->
+        <div id="empty-state" class="hidden flex-1 flex flex-col items-center justify-center text-slate-700 text-sm gap-2">
+          <svg class="w-7 h-7 opacity-25" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+          </svg>
+          No words found for this prefix
+        </div>
+        <div id="idle-state" class="flex-1 flex items-center justify-center text-slate-700 text-sm select-none">
+          Type to see suggestions
+        </div>
+
+        <!-- Footer stats bar -->
+        <div class="flex-none flex items-center justify-between px-5 py-3 border-t border-emerald-900/20 bg-black/10">
+          <span id="word-count-label" class="text-xs font-mono text-slate-600">Loading vocabulary…</span>
+          <span class="text-xs text-slate-700 hidden sm:block">
+            <kbd>↑</kbd><kbd>↓</kbd> navigate &nbsp; <kbd>Enter</kbd> select &nbsp; <kbd>Esc</kbd> clear
+          </span>
+        </div>
+      </div>
+
+      <!-- ═══════════════ RIGHT: Trie Visualizer ═══════════════ -->
+      <div class="glass rounded-2xl border border-emerald-900/40 shadow-2xl flex flex-col min-h-0 overflow-hidden">
+
+        <!-- Panel header -->
+        <div class="flex-none flex items-center justify-between px-5 py-3.5 border-b border-emerald-900/30">
+          <div class="flex items-center gap-2.5">
+            <svg class="w-4 h-4 text-emerald-500 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M3 9h18M3 15h18M12 3v18"/>
+            </svg>
+            <span class="text-sm font-semibold text-slate-200">Prefix Tree Traversal</span>
+          </div>
+          <span class="text-xs text-slate-600">live path · character by character</span>
+        </div>
+
+        <!-- Scrollable node chain — flex-1 fills remaining height -->
+        <div id="viz-scroll" class="flex-1 min-h-0 overflow-y-auto thin-scroll flex flex-col items-center py-8 px-6">
+
+          <!-- Idle placeholder -->
+          <div id="viz-idle" class="flex-1 flex flex-col items-center justify-center text-slate-700 text-sm text-center gap-3">
+            <svg class="w-10 h-10 opacity-15" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
+              <path d="M12 3v9m0 0-3-3m3 3 3-3M3 17h18"/>
+            </svg>
+            Trie path appears here<br/>as you type
+          </div>
+
+          <!-- Vertical node chain — filled by JS -->
+          <div id="viz-nodes" class="hidden flex-col items-center w-full"></div>
+        </div>
+
+        <!-- Legend -->
+        <div class="flex-none flex flex-wrap items-center gap-x-5 gap-y-1.5 px-5 py-3 border-t border-emerald-900/20 bg-black/10 text-xs text-slate-700">
+          <span class="flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full ring-1 ring-emerald-700/60 bg-emerald-950/40 inline-block"></span>
+            path node
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full ring-1 ring-emerald-400 bg-emerald-900/40 inline-block"></span>
+            end of word
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full ring-1 ring-red-500/60 bg-red-900/20 inline-block"></span>
+            dead end
+          </span>
+          <span class="ml-auto font-mono text-slate-600">N↓ = branch count</span>
+        </div>
+      </div>
+
+    </div><!-- end grid -->
+  </main>
+
+  <!-- ── Footer ── -->
+  <footer class="flex-none text-center py-3 text-xs text-slate-700">
+    Built with Python · FastAPI · Trie (Prefix Tree) · Tailwind CSS
+    &nbsp;·&nbsp;
+    <a href="/docs" target="_blank" class="hover:text-emerald-600 transition-colors underline underline-offset-2">API Docs</a>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
